@@ -1,0 +1,110 @@
+x-logging: &default-logging
+  driver: loki
+  options:
+    loki-url: 'http://localhost:3100/api/prom/push'
+    loki-pipeline-stages: |
+      - multiline:
+          firstline: '^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}:\d{2}'
+          max_wait_time: 3s
+      - regex:
+          expression: '^(?P<time>\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}:\d{2},d{3}) (?P<message>(?s:.*))$$'
+
+version: "3.8"
+services:
+
+  loki:
+    image: grafana/loki:latest
+    command: 
+      - '--config.file=/etc/loki/loki-local-config.yaml'
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+    volumes:
+      - ./infra/loki:/etc/loki
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yaml'
+      - '--web.enable-remote-write-receiver'
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    volumes:
+      - ./infra/prometheus:/etc/prometheus
+      - prom_data:/prometheus
+    depends_on:
+      - loki
+    logging: *default-logging
+
+  tempo:
+    image: grafana/tempo:latest
+    command:
+      - '--config.file=/mnt/config/tempo-local-config.yaml'
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+      - "9097:9097"
+      - "9411:9411"
+      - "14268:14268"
+    restart: unless-stopped
+    volumes:
+      - ./infra/tempo:/mnt/config
+    depends_on:
+      - loki
+    logging: *default-logging
+  
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=grafana
+    volumes:
+      - ./infra/grafana/grafana.ini:/etc/grafana/grafana.ini
+      - ./infra/grafana/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
+      - ./infra/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+      - ./infra/grafana/dashboards:/etc/grafana/dashboards
+    depends_on:
+      - loki
+      - prometheus
+      - tempo
+    logging: *default-logging
+
+  rabbitmq:
+    image: masstransit/rabbitmq:latest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+      - "15692:15692"
+    restart: unless-stopped
+    depends_on:
+      - loki
+    logging: *default-logging
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    depends_on:
+      - loki
+    logging: *default-logging
+  
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    command: 
+      - '--redis.addr=redis://redis:6379'
+    ports:
+      - "9121:9121"
+    restart: unless-stopped
+    depends_on:
+      - redis
+    logging: *default-logging
+    
+volumes:
+  prom_data:
